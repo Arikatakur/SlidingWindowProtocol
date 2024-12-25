@@ -2,79 +2,125 @@ package il.ac.kinneret.SWSender;
 
 import java.io.IOException;
 import java.net.*;
-import java.util.*;
-import java.util.zip.CRC32;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.util.*;
+import java.util.zip.CRC32;
 
 /**
- * @author Saleem Yousef
- * @version 1.9
+ * The SlidingWindowSender class implements the sliding window protocol for reliable
+ * data transfer over UDP. It reads a file, splits it into packets, and sends them
+ * to a specified destination using a sliding window mechanism.
+ * This class handles packet loss and retransmission.
+ *
+ * @version 3.0
  */
 public class SlidingWindowSender {
-    private static final int TIMEOUT_MULTIPLIER = 2;
+    private static final int rtt_multiplier = 2;
     private static String destinationIP;
     private static int destinationPort;
     private static String filePath;
     private static int packetSize;
-    private static int sws; 
-    private static int rtt; 
-    private static List<Integer> dropList = new ArrayList<>();
+    private static int sws;
+    private static int rtt;
+    private static List<Integer> dropL = new ArrayList<>();
 
+    /**
+     * The main method is the entry point of the program. It parses the arguments and initiates the file sending process.
+     *
+     * @param args Command line arguments
+     */
     public static void main(String[] args) {
         if (!parseArguments(args)) {
-            printUsage();
+            warningMessage();
             return;
         }
+
         try {
             sendFile();
         } catch (IOException e) {
             e.printStackTrace();
         }
     }
-
+    /**
+     * Parses the command line arguments to set the required parameters.
+     *
+     * @param args Command line arguments
+     * @return true if all required arguments are provided, false otherwise
+     */
     private static boolean parseArguments(String[] args) {
-        int flag = 0;
+        int Find_All_The_Condition = 0;
         for (String arg : args) {
             if (arg.startsWith("-dest=")) {
                 destinationIP = arg.substring(6);
-                flag++;
+                Find_All_The_Condition++;
             } else if (arg.startsWith("-port=")) {
-                destinationPort = Integer.parseInt(arg.substring(6));
-                flag++;
+                if (isNumeric(arg.substring(6))) {
+                    destinationPort = Integer.parseInt(arg.substring(6));
+                    Find_All_The_Condition++;
+                } else {
+                    System.out.println("Error parsing port: For input string: \"" + arg.substring(6) + "\"");
+                }
+
             } else if (arg.startsWith("-f=")) {
                 filePath = arg.substring(3);
-                flag++;
+                Find_All_The_Condition++;
             } else if (arg.startsWith("-packetsize=")) {
                 packetSize = Integer.parseInt(arg.substring(12));
-                flag++;
+                Find_All_The_Condition++;
             } else if (arg.startsWith("-sws=")) {
                 sws = Integer.parseInt(arg.substring(5));
-                if (sws > 0) {
-                    flag++;
-                } else {
+                if (sws > 0)
+                    Find_All_The_Condition++;
+                else
                     System.out.println("Error: SWS must be positive.");
-                }
+
             } else if (arg.startsWith("-rtt=")) {
                 rtt = Integer.parseInt(arg.substring(5));
-                flag++;
+                Find_All_The_Condition++;
             } else if (arg.startsWith("-droplist=")) {
-                dropList = parseDropList(arg.substring(10));
+                dropL = ParseDropList(arg.substring(10));
             }
         }
 
-        return flag == 6;
+        return Find_All_The_Condition == 6;
     }
 
-    private static List<Integer> parseDropList(String dropListStr) {
-        List<Integer> parsedDropList = new ArrayList<>();
-        for (String s : dropListStr.split(",")) {
-            parsedDropList.add(Integer.parseInt(s));
+    /**
+     * Parses the drop list argument to generate a list of integers representing packet indices to drop.
+     *
+     * @param Substring Comma-separated list of packet indices to drop
+     * @return List of integers representing packet indices to drop
+     */
+    private static List<Integer> ParseDropList(String Substring) {
+        ArrayList<Integer> Integer_Substring = new ArrayList<>();
+        for (String s : Substring.split(",")) {
+            Integer_Substring.add(Integer.parseInt(s));
         }
-        return parsedDropList;
+        return Integer_Substring;
     }
 
+    /**
+     * Checks if a given string is numeric.
+     *
+     * @param str The string to check
+     * @return true if the string is numeric, false otherwise
+     */
+    public static boolean isNumeric(String str)  {
+        for (int i = 0; i < str.length(); i++) {
+            if (!Character.isDigit(str.charAt(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Sends the file using the sliding window protocol.
+     *
+     * @throws IOException if an I/O error occurs
+     */
     private static void sendFile() throws IOException {
         DatagramSocket socket = new DatagramSocket();
         InetAddress address = InetAddress.getByName(destinationIP);
@@ -86,90 +132,128 @@ public class SlidingWindowSender {
         boolean[] ackReceived = new boolean[totalPackets];
         Map<Integer, Long> packetTimers = new HashMap<>();
         Map<Integer, byte[]> sentPackets = new HashMap<>();
+        Set<Integer> initialDrops = new HashSet<>(dropL);
 
         while (base < totalPackets) {
             while (nextSeqNum < base + sws && nextSeqNum < totalPackets) {
-                if (!dropList.contains(nextSeqNum)) {
-                    byte[] packet = createPacket(fileData, nextSeqNum, packetSize);
+                boolean isInitialDrop = initialDrops.contains(nextSeqNum);
+                byte[] packet = createPacket(fileData, nextSeqNum, packetSize, isInitialDrop);
+                if (!dropL.contains(nextSeqNum) || isInitialDrop) {
                     DatagramPacket datagramPacket = new DatagramPacket(packet, packet.length, address, destinationPort);
                     socket.send(datagramPacket);
                     System.out.println("Sent packet " + nextSeqNum);
-
-                    packetTimers.put(nextSeqNum, System.currentTimeMillis());
-                    sentPackets.put(nextSeqNum, packet);
-                } else {
-                    System.out.println("Dropped packet " + nextSeqNum);
-                    dropList.remove((Integer) nextSeqNum);
                 }
+                initialDrops.remove(nextSeqNum);
+                packetTimers.put(nextSeqNum, System.currentTimeMillis());
+                sentPackets.put(nextSeqNum, packet);
                 nextSeqNum++;
             }
 
-            // Wait for ACKs
             try {
                 socket.setSoTimeout(rtt);
                 DatagramPacket ackPacket = new DatagramPacket(new byte[4], 4);
                 socket.receive(ackPacket);
                 int ackNumber = byteArrayToInt(ackPacket.getData());
-                System.out.println("Received ACK: " + ackNumber);
+                System.out.println("Received ACK on " + ackNumber);
 
                 if (ackNumber >= base) {
                     for (int i = base; i <= ackNumber; i++) {
                         ackReceived[i] = true;
                     }
-                    base = ackNumber + 1; // Slide the window forward
+                    base = ackNumber + 1;
                 }
             } catch (SocketTimeoutException e) {
-                System.out.println("Timeout! Retransmitting...");
+                System.out.println("Timed out waiting for ACK");
+
                 for (int i = base; i < nextSeqNum; i++) {
-                    if (!ackReceived[i] && System.currentTimeMillis() - packetTimers.get(i) > TIMEOUT_MULTIPLIER * rtt) {
-                        byte[] packet = sentPackets.get(i);
+                    if (!ackReceived[i] && System.currentTimeMillis() - packetTimers.get(i) > rtt_multiplier * rtt) {
+                        // boolean isInitialDrop = initialDrops.contains(i);
+                        byte[] packet = createPacket(fileData, i, packetSize, false);
                         DatagramPacket datagramPacket = new DatagramPacket(packet, packet.length, address, destinationPort);
                         socket.send(datagramPacket);
                         System.out.println("Resent packet " + i);
-
                         packetTimers.put(i, System.currentTimeMillis());
                     }
                 }
             }
         }
-
-        // Send final packet
-        byte[] finalPacket = createFinalPacket();
-        DatagramPacket finalDatagramPacket = new DatagramPacket(finalPacket, finalPacket.length, address, destinationPort);
-        socket.send(finalDatagramPacket);
+        SlidingWindowPacket Final_Packet = new SlidingWindowPacket(-1, -1, new byte[]{-1});
         System.out.println("Sent final packet for " + filePath);
-        System.out.println("Received ACK: " + base);
+        SendPacket(socket, address, Final_Packet);
+        System.out.println("Received ACK " + totalPackets);
         socket.close();
     }
 
-    private static byte[] createPacket(byte[] fileData, int sequenceNumber, int packetSize) {
+    /**
+     * Creates a new packet with the specified data and sequence number.
+     *
+     * @param fileData The file data to be sent
+     * @param sequenceNumber The sequence number of the packet
+     * @param packetSize The size of the packet
+     * @param initialDrop Whether the packet should be initially dropped
+     * @return The byte array representing the packet
+     */
+    private static byte[] createPacket(byte[] fileData, int sequenceNumber, int packetSize, boolean initialDrop) {
         int start = sequenceNumber * packetSize;
         int end = Math.min(start + packetSize, fileData.length);
         byte[] data = Arrays.copyOfRange(fileData, start, end);
 
-        CRC32 crc = new CRC32();
-        crc.update(data);
-
         ByteBuffer buffer = ByteBuffer.allocate(8 + data.length);
         buffer.putInt(sequenceNumber);
-        buffer.putInt((int) crc.getValue());
+        if (initialDrop) {
+            buffer.putInt(0);
+        } else {
+            buffer.putInt(calculateCRC32(data));
+        }
         buffer.put(data);
         return buffer.array();
     }
 
-    private static byte[] createFinalPacket() {
-        ByteBuffer buffer = ByteBuffer.allocate(8 + 1);
-        buffer.putInt(-1);
-        buffer.putInt(-1);
-        buffer.put((byte) -1);
-        return buffer.array();
+    /**
+     * Sends a packet using the provided DatagramSocket.
+     *
+     * @param socket The DatagramSocket to use for sending the packet
+     * @param address The destination address
+     * @param packet The packet to be sent
+     * @throws IOException if an I/O error occurs
+     */
+    private static void SendPacket(DatagramSocket socket, InetAddress address, SlidingWindowPacket packet) throws IOException {
+        byte[] Data = packet.toByteArray();
+        DatagramPacket udpPacket = new DatagramPacket(Data, Data.length, address, destinationPort);
+        socket.send(udpPacket);
     }
 
+    /**
+     * Calculates the CRC32 checksum for the given data.
+     *
+     * @param data The data to calculate the checksum for
+     * @return The CRC32 checksum value
+     */
+    private static int calculateCRC32(byte[] data) {
+        CRC32 crc = new CRC32();
+        crc.update(data);
+        return (int) crc.getValue();
+    }
+
+
+    /**
+     * Converts a byte array to an integer.
+     *
+     * @param bytes The byte array to convert
+     * @return The resulting integer
+     */
     private static int byteArrayToInt(byte[] bytes) {
-        return ByteBuffer.wrap(bytes).getInt();
+        ByteBuffer buffer = ByteBuffer.wrap(bytes);
+        return buffer.getInt();
     }
 
-    private static void printUsage() {
-        System.out.println("Syntax: SlidingWindowSender -dest=ip -port=p -f=filename -packetsize=bytes -sws=size -rtt=ms [-droplist=1,2]");
+    /**
+     * Prints a warning message about the correct syntax for running the program.
+     */
+    private static void warningMessage() {
+        System.out.println("Syntax: SlidingWindowClient-5785 -dest=ip -port=p -f=filename -packetsize=bytes " +
+                "-sws=size -rtt=ms [-droplist=1,2]\n" +
+                "-droplist is optional.  Refers to packets that will be sent incorrectly the first " +
+                "time.  The list should be comma separated without spaces.  Example: 1,3,4");
     }
 }

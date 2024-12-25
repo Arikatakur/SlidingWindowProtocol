@@ -5,11 +5,22 @@ import java.net.*;
 import java.nio.ByteBuffer;
 import java.util.zip.CRC32;
 
+/**
+ * Utility class for packet-related operations.
+ * Provides methods for sending acknowledgments, calculating CRC, 
+ * and converting between byte arrays and numeric data types.
+ *
+ * @version 1.0
+ */
+
 
 public class PacketUtils {
 
     /**
      *
+     * 
+     * Sends an acknowledgment (ACK) packet for a specific sequence number.
+     * 
      * @param socket The DatagramSocket to use for sending the acknowledgment
      * @param address The destination address
      * @param port The destination port
@@ -24,7 +35,7 @@ public class PacketUtils {
     }
 
     /**
-     * Calculates the CRC32 for the given data.
+     * Calculates the CRC32 checksum for a given byte array.
      *
      * @param data The data to calculate the checksum for
      * @return The CRC32 checksum value
@@ -47,7 +58,7 @@ public class PacketUtils {
     }
 
     /**
-     * Converts an integer to a byte array.
+     * Converts an integer to a 4 byte array.
      *
      * @param value The integer to convert
      * @return The resulting byte array
